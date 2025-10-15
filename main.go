@@ -1,60 +1,83 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"log"
+	"github.com/google/uuid"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"net/http"
 )
 
-var task string
-
 type requestBody struct {
 	Task string `json:"task"`
+	ID   string `json:"id"`
 }
 
-func postHandler(w http.ResponseWriter, r *http.Request) {
+var rB = []requestBody{}
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "Недопустимый метод", http.StatusMethodNotAllowed)
-		return
-	}
-
+func postHandler(c echo.Context) error {
 	var RequestBody requestBody
-	err := json.NewDecoder(r.Body).Decode(&RequestBody)
-	if err != nil {
-		http.Error(w, "Bad request: "+err.Error(), http.StatusBadRequest)
-		return
+	if err := c.Bind(&RequestBody); err != nil {
+		return c.JSON(http.StatusBadRequest, err)
 	}
-	task = RequestBody.Task
 
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Запрос изменен"))
+	task := requestBody{
+		Task: RequestBody.Task,
+		ID:   uuid.NewString(),
+	}
+
+	rB = append(rB, task)
+	return c.JSON(http.StatusCreated, task)
 }
 
-func getHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Недопустимый метод", http.StatusMethodNotAllowed)
-		return
-	}
-	getTask := task
-	response := fmt.Sprintf("Hello, %s", getTask)
-	w.Write([]byte(response))
+func getHandler(c echo.Context) error {
 
+	if len(rB) == 0 {
+		return c.String(http.StatusOK, "Empty request")
+	}
+
+	return c.String(http.StatusOK, "Hello "+rB[0].Task)
+}
+
+func patchHandler(c echo.Context) error {
+	id := c.Param("id")
+
+	var reqBody requestBody
+	if err := c.Bind(&reqBody); err != nil {
+
+		return c.JSON(http.StatusBadRequest, err)
+	}
+
+	for i, taskItem := range rB {
+		if taskItem.ID == id {
+			rB[i].Task = reqBody.Task
+
+			return c.JSON(http.StatusOK, rB[i])
+		}
+	}
+	return c.JSON(http.StatusNotFound, "Task not found")
+}
+
+func deleteHandler(c echo.Context) error {
+	id := c.Param("id")
+
+	for i, taskItem := range rB {
+		if taskItem.ID == id {
+			rB = append(rB[:i], rB[i+1:]...)
+			return c.NoContent(http.StatusNoContent)
+		}
+	}
+	return c.JSON(http.StatusBadRequest, "Task not found")
 }
 
 func main() {
-	http.HandleFunc("/task", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			getHandler(w, r)
-		case http.MethodPost:
-			postHandler(w, r)
-		default:
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
+	e := echo.New()
 
-	fmt.Println("Server started at :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	e.Use(middleware.Logger())
+
+	e.POST("/task", postHandler)
+	e.GET("/task", getHandler)
+	e.PATCH("/task/:id", patchHandler)
+	e.DELETE("/task/:id", deleteHandler)
+
+	e.Logger.Fatal(e.Start(":8080"))
 }
