@@ -4,15 +4,42 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	"log"
 	"net/http"
 )
 
-type requestBody struct {
-	Task string `json:"task"`
-	ID   string `json:"id"`
+var db *gorm.DB
+
+func initDB() {
+	dsn := "host=localhost user=postgres password=postgres dbname=postgres port=5432 sslmode=disable"
+	var err error
+
+	db, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("Could not connect to database: %v", err)
+	}
+
+	if err := db.AutoMigrate(&requestBody{}); err != nil {
+		log.Fatalf("Could not migrate: %v", err)
+	}
 }
 
-var rB = []requestBody{}
+type requestBody struct {
+	Task string `json:"task"`
+	ID   string `gorm:"primaryKey" json:"id"`
+}
+
+func getHandler(c echo.Context) error {
+	var rB []requestBody
+
+	if err := db.Find(&rB).Error; err != nil {
+		return c.JSON(http.StatusInternalServerError, err)
+	}
+
+	return c.JSON(http.StatusOK, rB)
+}
 
 func postHandler(c echo.Context) error {
 	var RequestBody requestBody
@@ -24,18 +51,11 @@ func postHandler(c echo.Context) error {
 		Task: RequestBody.Task,
 		ID:   uuid.NewString(),
 	}
-
-	rB = append(rB, task)
-	return c.JSON(http.StatusCreated, task)
-}
-
-func getHandler(c echo.Context) error {
-
-	if len(rB) == 0 {
-		return c.String(http.StatusOK, "Empty request")
+	if err := db.Create(&task).Error; err != nil {
+		return c.JSON(http.StatusInternalServerError, err)
 	}
 
-	return c.String(http.StatusOK, "Hello "+rB[0].Task)
+	return c.JSON(http.StatusCreated, task)
 }
 
 func patchHandler(c echo.Context) error {
@@ -47,29 +67,32 @@ func patchHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, err)
 	}
 
-	for i, taskItem := range rB {
-		if taskItem.ID == id {
-			rB[i].Task = reqBody.Task
-
-			return c.JSON(http.StatusOK, rB[i])
-		}
+	var req requestBody
+	if err := db.First(&req, "id = ?", id).Error; err != nil {
+		return c.JSON(http.StatusInternalServerError, err)
 	}
-	return c.JSON(http.StatusNotFound, "Task not found")
+
+	req.Task = reqBody.Task
+	if err := db.Save(&req).Error; err != nil {
+		return c.JSON(http.StatusInternalServerError, err)
+	}
+
+	return c.JSON(http.StatusOK, req)
 }
 
 func deleteHandler(c echo.Context) error {
 	id := c.Param("id")
 
-	for i, taskItem := range rB {
-		if taskItem.ID == id {
-			rB = append(rB[:i], rB[i+1:]...)
-			return c.NoContent(http.StatusNoContent)
-		}
+	if err := db.Delete(&requestBody{}, "id = ?", id).Error; err != nil {
+		return c.JSON(http.StatusInternalServerError, err)
 	}
-	return c.JSON(http.StatusBadRequest, "Task not found")
+
+	return c.NoContent(http.StatusNoContent)
 }
 
 func main() {
+	initDB()
+
 	e := echo.New()
 
 	e.Use(middleware.Logger())
